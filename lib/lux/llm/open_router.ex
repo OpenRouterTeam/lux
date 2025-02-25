@@ -1,6 +1,7 @@
-defmodule Lux.LLM.OpenAI do
+defmodule Lux.LLM.OpenRouter do
   @moduledoc """
-  OpenAI LLM implementation that supports passing Beams, Prisms, and Lenses as tools.
+  OpenRouter LLM implementation that supports passing Beams, Prisms, and Lenses as tools.
+  OpenRouter provides access to a wide range of LLM models through a single unified API.
   """
 
   @behaviour Lux.LLM
@@ -14,11 +15,11 @@ defmodule Lux.LLM.OpenAI do
   require Lens
   require Logger
 
-  @endpoint "https://api.openai.com/v1/chat/completions"
+  @endpoint "https://openrouter.ai/api/v1/chat/completions"
 
   defmodule Config do
     @moduledoc """
-    Configuration module for OpenAI.
+    Configuration module for OpenRouter.
     """
     @type t :: %__MODULE__{
             endpoint: String.t(),
@@ -36,11 +37,13 @@ defmodule Lux.LLM.OpenAI do
             max_tokens: integer(),
             tool_choice: map(),
             user: String.t(),
-            messages: [map()]
+            messages: [map()],
+            http_referer: String.t(),
+            x_title: String.t()
           }
 
-    defstruct endpoint: "https://api.openai.com/v1/chat/completions",
-              model: "gpt-4",
+    defstruct endpoint: "https://openrouter.ai/api/v1/chat/completions",
+              model: "openai/gpt-3.5-turbo",
               api_key: nil,
               temperature: 0.7,
               frequency_penalty: 0.0,
@@ -54,7 +57,9 @@ defmodule Lux.LLM.OpenAI do
               max_tokens: nil,
               tool_choice: nil,
               user: nil,
-              messages: []
+              messages: [],
+              http_referer: "https://github.com/Spectral-Finance/lux",
+              x_title: "Lux Framework"
   end
 
   @impl true
@@ -64,8 +69,8 @@ defmodule Lux.LLM.OpenAI do
         Config,
         Map.merge(
           %{
-            model: Application.get_env(:lux, :open_ai_models)[:default],
-            api_key: Application.get_env(:lux, :api_keys)[:openai]
+            model: Application.get_env(:lux, :open_router_models)[:default] || "openai/gpt-3.5-turbo",
+            api_key: Application.get_env(:lux, :api_keys)[:openrouter]
           },
           config
         )
@@ -90,7 +95,9 @@ defmodule Lux.LLM.OpenAI do
       json: body,
       headers: [
         {"Authorization", "Bearer #{Lux.Config.resolve(config.api_key)}"},
-        {"Content-Type", "application/json"}
+        {"Content-Type", "application/json"},
+        {"HTTP-Referer", config.http_referer},
+        {"X-Title", config.x_title}
       ]
     ]
     |> Keyword.merge(Application.get_env(:lux, __MODULE__, []))
@@ -111,34 +118,36 @@ defmodule Lux.LLM.OpenAI do
     end
   end
 
-  def build_messages(prompt) do
+  # Helper functions that will be implemented in the next step
+  # after making the OpenAI module functions public
+  defp build_messages(prompt) do
     [%{role: "user", content: prompt}]
   end
 
-  def build_tools_config([]), do: []
-  def build_tools_config(tools), do: Enum.map(tools, &tool_to_function/1)
+  defp build_tools_config([]), do: []
+  defp build_tools_config(tools), do: Enum.map(tools, &tool_to_function/1)
 
-  def maybe_add_tools(body, [], _tool_choice), do: body
+  defp maybe_add_tools(body, [], _tool_choice), do: body
 
-  def maybe_add_tools(body, tools, tool_choice) do
+  defp maybe_add_tools(body, tools, tool_choice) do
     body
     |> Map.put(:tools, tools)
     |> Map.put(:tool_choice, format_tool_choice(tool_choice))
   end
 
-  def format_tool_choice(:none), do: "none"
-  def format_tool_choice(:auto), do: "auto"
+  defp format_tool_choice(:none), do: "none"
+  defp format_tool_choice(:auto), do: "auto"
 
-  def format_tool_choice(name) when is_binary(name),
+  defp format_tool_choice(name) when is_binary(name),
     do: %{"type" => "function", "function" => %{"name" => String.replace(name, ".", "_")}}
 
-  def format_tool_choice(_), do: "auto"
+  defp format_tool_choice(_), do: "auto"
 
-  def maybe_add_response_format(body, %Config{json_response: false}) do
+  defp maybe_add_response_format(body, %Config{json_response: false}) do
     Map.put(body, :response_format, %{type: "text"})
   end
 
-  def maybe_add_response_format(body, %Config{json_response: true, json_schema: schema})
+  defp maybe_add_response_format(body, %Config{json_response: true, json_schema: schema})
        when is_map(schema) do
     Map.put(body, :response_format, %{
       type: "json_schema",
@@ -146,7 +155,7 @@ defmodule Lux.LLM.OpenAI do
     })
   end
 
-  def maybe_add_response_format(body, %Config{json_response: true, json_schema: nil}) do
+  defp maybe_add_response_format(body, %Config{json_response: true, json_schema: nil}) do
     # OpenAI requires the user to specify the format of the response in the prompt in
     # case json_schema is nil. We must mention json "somewere", they say.
     Map.put(
@@ -160,7 +169,7 @@ defmodule Lux.LLM.OpenAI do
     )
   end
 
-  def maybe_add_response_format(body, %Config{json_response: true, json_schema: schema})
+  defp maybe_add_response_format(body, %Config{json_response: true, json_schema: schema})
        when is_atom(schema) do
     Map.put(body, :response_format, %{
       type: "json_schema",
@@ -168,7 +177,7 @@ defmodule Lux.LLM.OpenAI do
     })
   end
 
-  def maybe_add_response_format(body, _), do: Map.put(body, :response_format, %{type: "text"})
+  defp maybe_add_response_format(body, _), do: Map.put(body, :response_format, %{type: "text"})
 
   def tool_to_function(tool_module) when is_atom(tool_module) and not is_nil(tool_module) do
     cond do
@@ -221,7 +230,7 @@ defmodule Lux.LLM.OpenAI do
     }
   end
 
-  def handle_response(%{body: body}, _config) do
+  defp handle_response(%{body: body}, _config) do
     with %{"choices" => [choice | _]} <- body,
          %{"message" => message, "finish_reason" => finish_reason} <- choice,
          {:ok, content} <- parse_content(message["content"]),
@@ -327,8 +336,8 @@ defmodule Lux.LLM.OpenAI do
     end
   end
 
-  def handle_error(error) do
-    Logger.error("OpenAI API error: #{inspect(error)}")
-    {:error, "OpenAI API error: #{inspect(error)}"}
+  defp handle_error(error) do
+    Logger.error("OpenRouter API error: #{inspect(error)}")
+    {:error, "OpenRouter API error: #{inspect(error)}"}
   end
 end
